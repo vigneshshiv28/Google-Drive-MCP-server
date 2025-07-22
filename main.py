@@ -9,7 +9,9 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import asyncio
 import logging
-import json
+from utils.query_builder import build_query_string
+from typing import List, Optional
+
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -30,7 +32,7 @@ def error_response(message: str, code: int = 500) -> Dict[str, Any]:
         }
     }
 
-class GoogleDriveAgent:
+class GoogleMCP:
     SCOPES = ['https://www.googleapis.com/auth/drive.metadata.readonly']
 
     def __init__(self):
@@ -61,8 +63,9 @@ class GoogleDriveAgent:
     def _register_tools(self):
 
         self.mcp.tool()(self.list_files)
+        self.mcp.tool()(self.search_files)
 
-    async def list_files(
+    def list_files(
         self,
         page_size: int = 10,
         page_token: str = None
@@ -107,6 +110,121 @@ class GoogleDriveAgent:
             )
         except Exception as e:
             logging.error(f"An unexpected error occurred: {e}")
+            return error_response(message=f"An unexpected error occurred: {e}")
+        
+    def search_files(
+        self,
+        name: Optional[str] = None,
+        exact_name: bool = False,
+        mime_type: Optional[str] = None,
+        contains_text: Optional[str] = None,
+        modified_after: Optional[str] = None,
+        modified_before: Optional[str] = None,
+        parent_folder_id: Optional[str] = None,
+        starred: Optional[bool] = None,
+        trashed: bool = False,
+        shared_with_me: Optional[bool] = None,
+        owner_email: Optional[str] = None,
+        folders_only: bool = False,
+        exclude_folders: bool = False,
+        limit: int = 20,
+        fields: List[str] = None
+    ) -> Dict[str, Any]:
+
+        
+        if fields is None:
+            fields = ["id", "name", "mimeType", "modifiedTime"]
+        
+        logging.info(f"Searching Google Drive files with parameters")
+        
+        try:
+            query_string = build_query_string(
+                name=name,
+                mime_type=mime_type,
+                contains_text=contains_text,
+                modified_after=modified_after,
+                modified_before=modified_before,
+                parent_folder_id=parent_folder_id,
+                starred=starred,
+                trashed=trashed,
+                shared_with_me=shared_with_me,
+                owner_email=owner_email,
+                exact_name=exact_name,
+                folders_only=folders_only,
+                exclude_folders=exclude_folders
+            )
+            logging.info(f"Built query: {query_string}")
+            
+            fields_str = f"nextPageToken, files({', '.join(fields)})"
+            
+            files = []
+            page_token = None
+            
+            while len(files) < limit:
+                page_size = min(100, limit - len(files)) 
+                
+                request_params = {
+                    "spaces": "drive",
+                    "fields": fields_str,
+                    "pageSize": page_size,
+                }
+                
+                if page_token:
+                    request_params["pageToken"] = page_token
+                
+                if query_string.strip():
+                    request_params["q"] = query_string
+                
+                logging.info(f"Making API request with params: {request_params}")
+                response = self.service.files().list(**request_params).execute()
+                
+                batch_files = response.get("files", [])
+                files.extend(batch_files)
+                
+                page_token = response.get("nextPageToken")
+                if not page_token or len(batch_files) == 0:
+                    break
+            
+            files = files[:limit]
+            
+            logging.info(f"Found {len(files)} files matching search criteria")
+            
+            formatted_files = []
+            for file in files:
+                file_data = {}
+                for field in fields:
+                    if field in file:
+                        file_data[field] = file[field]
+                formatted_files.append(file_data)
+            
+            return success_response({
+                "files": formatted_files,
+                "totalFiles": len(formatted_files),
+                "queryUsed": query_string if query_string.strip() else "No query (list all files)",
+                "searchParameters": {
+                    "name": name,
+                    "mime_type": mime_type,
+                    "contains_text": contains_text,
+                    "modified_after": modified_after,
+                    "modified_before": modified_before,
+                    "starred": starred,
+                    "folders_only": folders_only,
+                    "exclude_folders": exclude_folders,
+                    "limit": limit
+                }
+            })
+            
+        except HttpError as error:
+            logging.error(f"Google Drive API error: {error.resp.status} - {error.content.decode()}")
+            error_message = f"Google Drive API error: {error.content.decode()}"
+            if error.resp.status == 400:
+                error_message += " (This might be due to an invalid query string. Please check your search parameters.)"
+            return error_response(
+                message=error_message,
+                code=error.resp.status
+            )
+        except Exception as e:
+            logging.error(f"An unexpected error occurred during search: {e}")
             return error_response(message=f"An unexpected error occurred: {e}")
 
     def run(self):
