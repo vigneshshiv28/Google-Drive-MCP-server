@@ -1,0 +1,8 @@
+credentials.json
+token.json
+uv.lock
+.vscode/
+env/
+venv/
+.venv
+__pycache__/
