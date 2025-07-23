@@ -32,8 +32,8 @@ def error_response(message: str, code: int = 500) -> Dict[str, Any]:
         }
     }
 
-class GoogleMCP:
-    SCOPES = ['https://www.googleapis.com/auth/drive.metadata.readonly']
+class GoogleDriverMCP:
+    SCOPES = ['https://www.googleapis.com/auth/drive'] 
 
     def __init__(self):
         self.service = self._authenticate_gdrive()
@@ -64,6 +64,7 @@ class GoogleMCP:
 
         self.mcp.tool()(self.list_files)
         self.mcp.tool()(self.search_files)
+        self.mcp.tool()(self.create_folder)
 
     def list_files(
         self,
@@ -226,13 +227,41 @@ class GoogleMCP:
         except Exception as e:
             logging.error(f"An unexpected error occurred during search: {e}")
             return error_response(message=f"An unexpected error occurred: {e}")
+        
+    def create_folder(
+            self,
+            name: str,
+    )-> Dict[str, Any]:
+        logging.info(f"Creating a new folder with name: {name}")
+
+        folder_metadata = {
+            "name": name,
+            "mimeType": "application/vnd.google-apps.folder",
+        }
+        try: 
+            folder = self.service.files().create(body=folder_metadata, fields="id").execute()
+
+            logging.info(f"Folder created with ID: {folder['id']}")
+
+            return success_response({
+                "id": folder["id"],
+                "name": name,
+                "mimeType": "application/vnd.google-apps.folder"
+            })
+        except HttpError as error:
+            logging.error(f"Google Drive API error: {error.resp.status} - {error.content.decode()}")
+            return error_response(
+                message=f"Google Drive API error: {error.content.decode()}",
+                code=error.resp.status
+            )
+        
 
     def run(self):
         logging.info("Starting MCP server for GoogleDriveAgent")
         self.mcp.run()
 
 if __name__ == "__main__":
-    agent = GoogleDriveAgent()
+    agent = GoogleDriverMCP()
     agent.run()
 
 
