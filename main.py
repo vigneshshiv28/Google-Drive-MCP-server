@@ -7,6 +7,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaFileUpload
 import asyncio
 import logging
 from utils.query_builder import build_query_string
@@ -66,6 +67,8 @@ class GoogleDriverMCP:
         self.mcp.tool()(self.search_files)
         self.mcp.tool()(self.create_folder)
         self.mcp.tool()(self.create_folder_in_parent)
+        self.mcp.tool()(self.create_file)
+        self.mcp.tool()(self.upload_file_in_parent)
 
     def list_files(
         self,
@@ -255,6 +258,9 @@ class GoogleDriverMCP:
                 message=f"Google Drive API error: {error.content.decode()}",
                 code=error.resp.status
             )
+        except Exception as e:
+            logging.error(f"An unexpected error occurred during creating folder: {e}")
+            return error_response(message=f"An unexpected error occurred: {e}")
         
     def create_folder_in_parent(
             self,
@@ -288,6 +294,208 @@ class GoogleDriverMCP:
         except Exception as e:
             logging.error(f"An unexpected error occurred during folder creation in parent: {e}")
             return error_response(message=f"An unexpected error occurred: {e}")
+
+    def create_file(
+            self,
+            name: str = "Untitled",
+            mime_type: str = "application/vnd.google-apps.document",
+    ) -> Dict[str, Any]:
+        logging.info(f"Creating a new file with name: {name} and mime_type: {mime_type}")
+
+        file_metadata = {
+            "name": name,
+            "mimeType": mime_type,
+        }
+        try:
+            file = self.service.files().create(body=file_metadata, fields="id, name, mimeType").execute()
+
+            logging.info(f"File created with ID: {file['id']}")
+
+            return success_response({
+                "id": file["id"],
+                "name": file["name"],
+                "mimeType": file["mimeType"]
+            })
+        except HttpError as error:
+            logging.error(f"Google Drive API error: {error.resp.status} - {error.content.decode()}")
+            return error_response(
+                message=f"Google Drive API error: {error.content.decode()}",
+                code=error.resp.status
+            )
+        except Exception as e:
+            logging.error(f"An unexpected error occurred during creating file: {e}")
+            return error_response(message=f"An unexpected error occurred: {e}")
+        
+    
+    
+    def upload_file_in_parent(
+        self,
+        file_path: str, 
+        name: str,
+        mime_type: str,
+        parent_folder_id: str = None
+    ) -> Dict[str, Any]:
+
+        logging.info(f"Uploading file '{name}' ({mime_type}) from '{file_path}' in parent folder with ID: {parent_folder_id}")
+
+        file_metadata = {
+            "name": name,
+        }
+
+        if parent_folder_id:
+            file_metadata["parents"] = [parent_folder_id]
+
+        media = MediaFileUpload(file_path, mimetype=mime_type, resumable=True)
+
+        try:
+           
+            file = self.service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields="id, name, mimeType, parents, size" 
+            ).execute()
+
+            logging.info(f"File '{name}' created with ID: {file['id']} in parent {parent_folder_id}")
+
+            return success_response({
+                "id": file["id"],
+                "name": file["name"],
+                "mimeType": file["mimeType"],
+                "parents": file.get("parents"),
+                "size": file.get("size")
+            })
+        except HttpError as error:
+            logging.error(f"Google Drive API error when creating file in parent: {error.resp.status} - {error.content.decode()}")
+            return error_response(
+                message=f"Google Drive API error: {error.content.decode()}",
+                code=error.resp.status
+            )
+        except FileNotFoundError:
+            logging.error(f"File not found at path: {file_path}")
+            return error_response(
+                message=f"Local file not found: {file_path}",
+                code=404
+            )
+        except Exception as e:
+            logging.error(f"An unexpected error occurred during file creation in parent: {e}")
+            return error_response(message=f"An unexpected error occurred: {e}")
+        
+    def move_file_to_folder(
+            self,
+            file_id: str,
+            parent_folder_id: str
+    ) -> Dict[str, Any]:
+        logging.info(f"Moving file with ID: {file_id} to parent folder with ID: {parent_folder_id}")
+        if not file_id or not parent_folder_id:
+            logging.error("File ID and parent folder ID must be provided")
+            raise ValueError("File ID and parent folder ID must be provided")
+        try:
+            file = self.service.files().get(fileId=file_id, fields="parents").execute()
+            previous_parents = ",".join(file.get("parents", []))
+
+            self.service.files().update(
+                fileId=file_id,
+                addParents=parent_folder_id,
+                removeParents=previous_parents,
+                fields="id, parents"
+            ).execute()
+
+            logging.info(f"File {file_id} moved to folder {parent_folder_id}")
+
+            return success_response({
+                "id": file_id,
+                "parents": [parent_folder_id]
+            })
+        except HttpError as error:
+            logging.error(f"Google Drive API error when moving file: {error.resp.status} - {error.content.decode()}")
+            return error_response(
+                message=f"Google Drive API error: {error.content.decode()}",
+                code=error.resp.status
+            )
+        except Exception as e:
+            logging.error(f"An unexpected error occurred during moving file: {e}")
+            return error_response(message=f"An unexpected error occurred: {e}")
+    
+    def delete_file_or_folder(
+            self, 
+            file_id: str, 
+            is_shared_drive_file: bool = False
+    ) -> Dict[str, Any]:
+
+        logging.info(f"Trashing file/folder with ID: {file_id}")
+
+        if not file_id:
+            logging.error("File ID must be provided to trash.")
+            raise ValueError("File ID must be provided.")
+
+        try:
+            body_value = {'trashed': True}
+            request = self.service.files().update(
+                fileId=file_id,
+                body=body_value,
+                fields="id, trashed, explicitlyTrashed" 
+            )
+            if is_shared_drive_file:
+                request.supportsAllDrives(True) 
+
+            response = request.execute()
+
+            logging.info(f"File/folder {file_id} trashed successfully. Trashed status: {response.get('trashed')}")
+            return success_response({
+                "id": response.get("id"),
+                "trashed": response.get("trashed"),
+                "explicitlyTrashed": response.get("explicitlyTrashed")
+            })
+        except HttpError as error:
+            logging.error(f"Google Drive API error when delete file: {error.resp.status} - {error.content.decode()}")
+            if error.resp.status == 403 and "insufficientFilePermissions" in error.content.decode():
+                return error_response(
+                    message=f"Insufficient permissions to trash file {file_id}. Only the owner can trash a file.",
+                    code=403
+                )
+            return error_response(
+                message=f"Google Drive API error: {error.content.decode()}",
+                code=error.resp.status
+            )
+        except Exception as e:
+            logging.error(f"An unexpected error occurred during deleting file {file_id}: {e}")
+            return error_response(message=f"An unexpected error occurred: {e}")
+        
+    def permanently_delete_file_or_folder(
+            self, file_id: str, 
+            is_shared_drive_file: bool = False
+    ) -> Dict[str, Any]:
+
+        logging.info(f"Permanently deleting file/folder with ID: {file_id}")
+
+        if not file_id:
+            logging.error("File ID must be provided to permanently delete.")
+            raise ValueError("File ID must be provided.")
+
+        try:
+            request = self.service.files().delete(fileId=file_id)
+            if is_shared_drive_file:
+                request.supportsAllDrives(True) 
+
+            request.execute()
+
+            logging.info(f"File/folder {file_id} permanently deleted successfully.")
+            return success_response(message=f"File/folder {file_id} permanently deleted.")
+        except HttpError as error:
+            logging.error(f"Google Drive API error when permanently deleting file: {error.resp.status} - {error.content.decode()}")
+            if error.resp.status == 403:
+                return error_response(
+                    message=f"Insufficient permissions to permanently delete file {file_id}. Organizer role is often required for shared drive items.",
+                    code=403
+                )
+            return error_response(
+                message=f"Google Drive API error: {error.content.decode()}",
+                code=error.resp.status
+            )
+        except Exception as e:
+            logging.error(f"An unexpected error occurred during permanent deletion of file {file_id}: {e}")
+            return error_response(message=f"An unexpected error occurred: {e}")
+        
         
 
     def run(self):
