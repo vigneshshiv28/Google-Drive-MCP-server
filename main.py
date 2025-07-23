@@ -65,6 +65,7 @@ class GoogleDriverMCP:
         self.mcp.tool()(self.list_files)
         self.mcp.tool()(self.search_files)
         self.mcp.tool()(self.create_folder)
+        self.mcp.tool()(self.create_folder_in_parent)
 
     def list_files(
         self,
@@ -254,6 +255,39 @@ class GoogleDriverMCP:
                 message=f"Google Drive API error: {error.content.decode()}",
                 code=error.resp.status
             )
+        
+    def create_folder_in_parent(
+            self,
+            name: str,
+            parent_folder_id: str
+    ) -> Dict[str, Any]:
+        logging.info(f"Creating folder '{name}' in parent folder with ID: {parent_folder_id}")
+
+        folder_metadata = {
+            "name": name,
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [parent_folder_id] 
+        }
+        try:
+            folder = self.service.files().create(body=folder_metadata, fields="id, name, mimeType, parents").execute()
+
+            logging.info(f"Folder '{name}' created with ID: {folder['id']} in parent {parent_folder_id}")
+
+            return success_response({
+                "id": folder["id"],
+                "name": folder["name"],
+                "mimeType": folder["mimeType"],
+                "parents": folder.get("parents")
+            })
+        except HttpError as error:
+            logging.error(f"Google Drive API error when creating folder in parent: {error.resp.status} - {error.content.decode()}")
+            return error_response(
+                message=f"Google Drive API error: {error.content.decode()}",
+                code=error.resp.status
+            )
+        except Exception as e:
+            logging.error(f"An unexpected error occurred during folder creation in parent: {e}")
+            return error_response(message=f"An unexpected error occurred: {e}")
         
 
     def run(self):
