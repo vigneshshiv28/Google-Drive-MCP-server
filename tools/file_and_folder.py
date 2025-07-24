@@ -157,3 +157,64 @@ def create_folder_in_parent(service):
             logging.error(f"An unexpected error occurred during folder creation in parent: {e}")
             return error_response(f"An unexpected error occurred: {e}")
     return create_folder_in_parent
+
+def get_file_metadata(service):
+    def get_file_metadata(file_id: str, 
+        fields: str = "id, name, mimeType, size, createdTime, modifiedTime, owners, parents, webViewLink"):
+        logging.info(f"Fetching metadata for file ID: {file_id}")
+        try:
+            file = service.files().get(fileId=file_id, fields=fields, supportsAllDrives=True).execute()
+            logging.info(f"Successfully fetched metadata for file '{file.get('name')}'.")
+            return success_response(file)
+        except HttpError as e:
+            logging.error(f"Google Drive API error when fetching metadata: {e.resp.status} - {e.content.decode()}")
+            return error_response(f"Google Drive API error: {e.content.decode()}", e.resp.status)
+        except Exception as e:
+            logging.error(f"An unexpected error occurred fetching metadata for {file_id}: {e}")
+            return error_response(f"An unexpected error occurred: {e}")
+    return get_file_metadata
+
+def rename_file_or_folder(service):
+    def rename_file_or_folder(file_id: str, new_name: str):
+        logging.info(f"Renaming file ID: {file_id} to '{new_name}'")
+        try:
+            metadata = {'name': new_name}
+            updated_file = service.files().update(
+                fileId=file_id,
+                body=metadata,
+                fields='id, name'
+            ).execute()
+            logging.info(f"File {file_id} renamed to '{updated_file['name']}'")
+            return success_response(updated_file)
+        except HttpError as e:
+            logging.error(f"Google Drive API error when renaming file: {e.resp.status} - {e.content.decode()}")
+            return error_response(f"Google Drive API error: {e.content.decode()}", e.resp.status)
+        except Exception as e:
+            logging.error(f"An unexpected error occurred while renaming file {file_id}: {e}")
+            return error_response(f"An unexpected error occurred: {e}")
+    return rename_file_or_folder
+
+def copy_and_paste_file(service):
+    def copy_file(file_id: str, new_name: str = None, destination_folder_id: str = None):
+        logging.info(f"Copying file ID: {file_id}")
+        metadata = {}
+        if new_name:
+            metadata['name'] = new_name
+        if destination_folder_id:
+            metadata['parents'] = [destination_folder_id]
+            
+        try:
+            copied_file = service.files().copy(
+                fileId=file_id,
+                body=metadata,
+                fields='id, name, parents'
+            ).execute()
+            logging.info(f"File {file_id} copied to new file ID: {copied_file['id']}")
+            return success_response(copied_file)
+        except HttpError as e:
+            logging.error(f"Google Drive API error when copying file: {e.resp.status} - {e.content.decode()}")
+            return error_response(f"Google Drive API error: {e.content.decode()}", e.resp.status)
+        except Exception as e:
+            logging.error(f"An unexpected error occurred while copying file {file_id}: {e}")
+            return error_response(f"An unexpected error occurred: {e}")
+    return copy_file
