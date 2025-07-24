@@ -101,7 +101,7 @@ This is the final step where you generate the file that the agent will use to au
 Your project directory should now look something like this:
 
 ```
-/GoogleDriveGPT/
+/GoogleDriveMCP/
 |-- credentials.json
 |-- auth.py
 |-- file_and_folder.py
