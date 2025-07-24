@@ -1,13 +1,14 @@
 import os
-from typing import Any, Dict, Union
-import httpx
+from typing import Any, Dict
+
 from mcp.server.fastmcp import FastMCP
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaIoBaseUpload
+import io
 import asyncio
 import logging
 from utils.query_builder import build_query_string
@@ -69,6 +70,10 @@ class GoogleDriverMCP:
         self.mcp.tool()(self.create_folder_in_parent)
         self.mcp.tool()(self.create_file)
         self.mcp.tool()(self.upload_file_in_parent)
+        self.mcp.tool()(self.move_file_to_folder)
+        self.mcp.tool()(self.delete_file_or_folder)
+        self.mcp.tool()(self.permanently_delete_file_or_folder)
+        self.mcp.tool()(self.restore_file_or_folder)
 
     def list_files(
         self,
@@ -326,17 +331,15 @@ class GoogleDriverMCP:
             logging.error(f"An unexpected error occurred during creating file: {e}")
             return error_response(message=f"An unexpected error occurred: {e}")
         
-    
-    
     def upload_file_in_parent(
         self,
-        file_path: str, 
+        content: bytes, 
         name: str,
         mime_type: str,
         parent_folder_id: str = None
     ) -> Dict[str, Any]:
 
-        logging.info(f"Uploading file '{name}' ({mime_type}) from '{file_path}' in parent folder with ID: {parent_folder_id}")
+        logging.info(f"Uploading file '{name}' ({mime_type}) with provided content to parent folder ID: {parent_folder_id}")
 
         file_metadata = {
             "name": name,
@@ -345,10 +348,14 @@ class GoogleDriverMCP:
         if parent_folder_id:
             file_metadata["parents"] = [parent_folder_id]
 
-        media = MediaFileUpload(file_path, mimetype=mime_type, resumable=True)
-
         try:
-           
+ 
+
+            file_content_bytes = content
+            media_stream = io.BytesIO(file_content_bytes)
+            
+            media = MediaIoBaseUpload(media_stream, mimetype=mime_type, resumable=True)
+
             file = self.service.files().create(
                 body=file_metadata,
                 media_body=media,
@@ -365,19 +372,13 @@ class GoogleDriverMCP:
                 "size": file.get("size")
             })
         except HttpError as error:
-            logging.error(f"Google Drive API error when creating file in parent: {error.resp.status} - {error.content.decode()}")
+            logging.error(f"Google Drive API error when uploading file : {error.resp.status} - {error.content.decode()}")
             return error_response(
                 message=f"Google Drive API error: {error.content.decode()}",
                 code=error.resp.status
             )
-        except FileNotFoundError:
-            logging.error(f"File not found at path: {file_path}")
-            return error_response(
-                message=f"Local file not found: {file_path}",
-                code=404
-            )
         except Exception as e:
-            logging.error(f"An unexpected error occurred during file creation in parent: {e}")
+            logging.error(f"An unexpected error occurred during file upload : {e}")
             return error_response(message=f"An unexpected error occurred: {e}")
         
     def move_file_to_folder(
@@ -462,7 +463,8 @@ class GoogleDriverMCP:
             return error_response(message=f"An unexpected error occurred: {e}")
         
     def permanently_delete_file_or_folder(
-            self, file_id: str, 
+            self, 
+            file_id: str, 
             is_shared_drive_file: bool = False
     ) -> Dict[str, Any]:
 
@@ -495,9 +497,47 @@ class GoogleDriverMCP:
         except Exception as e:
             logging.error(f"An unexpected error occurred during permanent deletion of file {file_id}: {e}")
             return error_response(message=f"An unexpected error occurred: {e}")
-        
-        
+    
+    def restore_file_or_folder(
+            self, 
+            file_id: str, 
+            is_shared_drive_file: bool = False
+    ) -> Dict[str, Any]:
 
+        logging.info(f"Restoring file/folder with ID: {file_id} from trash")
+
+        if not file_id:
+            logging.error("File ID must be provided to restore.")
+            raise ValueError("File ID must be provided.")
+
+        try:
+            body_value = {'trashed': False}
+            request = self.service.files().update(
+                fileId=file_id,
+                body=body_value,
+                fields="id, trashed" 
+            )
+            if is_shared_drive_file:
+                request.supportsAllDrives(True) 
+
+            response = request.execute()
+
+            logging.info(f"File/folder {file_id} restored successfully. Trashed status: {response.get('trashed')}")
+            return success_response({
+                "id": response.get("id"),
+                "trashed": response.get("trashed")
+            })
+        except HttpError as error:
+            logging.error(f"Google Drive API error when restoring file: {error.resp.status} - {error.content.decode()}")
+            return error_response(
+                message=f"Google Drive API error: {error.content.decode()}",
+                code=error.resp.status
+            )
+        except Exception as e:
+            logging.error(f"An unexpected error occurred during restoring file {file_id}: {e}")
+            return error_response(message=f"An unexpected error occurred: {e}")
+        
+    
     def run(self):
         logging.info("Starting MCP server for GoogleDriveAgent")
         self.mcp.run()
